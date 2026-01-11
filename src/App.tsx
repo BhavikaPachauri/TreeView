@@ -93,10 +93,10 @@ const TreeNodeComponent = ({
   };
 
   const handleDelete = () => {
-    const message = node.children?.length 
+    const message = node.children?.length
       ? `Delete "${node.name}" and all its children?`
       : `Delete "${node.name}"?`;
-    
+
     if (confirm(message)) {
       onDelete(node.id);
     }
@@ -129,7 +129,7 @@ const TreeNodeComponent = ({
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    
+
     if (dragState.draggedNodeId === node.id) return;
 
     const rect = e.currentTarget.getBoundingClientRect();
@@ -151,7 +151,7 @@ const TreeNodeComponent = ({
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    
+
     if (dragState.dropPosition) {
       onDrop(node.id, dragState.dropPosition);
     }
@@ -176,8 +176,8 @@ const TreeNodeComponent = ({
         className={`
           flex items-center gap-2 sm:gap-3 py-2 px-2 sm:px-3 rounded-xl transition-all duration-200
           ${isDragging ? 'opacity-40 scale-95' : ''}
-          ${dropPosition === 'inside' 
-            ? 'bg-gradient-to-r from-blue-50 to-purple-50 ring-2 ring-blue-400 shadow-md scale-[1.02]' 
+          ${dropPosition === 'inside'
+            ? 'bg-gradient-to-r from-blue-50 to-purple-50 ring-2 ring-blue-400 shadow-md scale-[1.02]'
             : 'hover:bg-gradient-to-r hover:from-gray-50 hover:to-slate-50'
           }
         `}
@@ -202,8 +202,8 @@ const TreeNodeComponent = ({
           disabled={!node.hasChildren}
           className={`
             w-6 h-6 sm:w-7 sm:h-7 flex items-center justify-center rounded-lg transition-all duration-200
-            ${node.hasChildren 
-              ? 'text-gray-700 hover:bg-gradient-to-br hover:from-blue-100 hover:to-purple-100 hover:shadow-sm cursor-pointer active:scale-95' 
+            ${node.hasChildren
+              ? 'text-gray-700 hover:bg-gradient-to-br hover:from-blue-100 hover:to-purple-100 hover:shadow-sm cursor-pointer active:scale-95'
               : 'text-transparent cursor-default'}
           `}
         >
@@ -380,7 +380,7 @@ export const TreeView = ({ data, onChange }: TreeViewProps) => {
 
   const extractNode = (nodes: TreeNode[], id: string): { tree: TreeNode[], node: TreeNode | null } => {
     let extractedNode: TreeNode | null = null;
-    
+
     const filterTree = (items: TreeNode[]): TreeNode[] => {
       return items.filter(item => {
         if (item.id === id) {
@@ -501,7 +501,7 @@ export const TreeView = ({ data, onChange }: TreeViewProps) => {
     }
 
     const { tree: treeWithoutDragged, node: draggedNode } = extractNode(data, dragState.draggedNodeId);
-    
+
     if (!draggedNode) {
       setDragState({ draggedNodeId: null, dropTargetId: null, dropPosition: null });
       return;
@@ -581,31 +581,13 @@ export default function App() {
     },
   ]);
 
-  const handleAddRoot = () => {
-    const name = prompt("Enter root node name:");
-    if (name && name.trim()) {
-      const newNode: TreeNode = {
-        id: `root-${Date.now()}`,
-        name: name.trim(),
-        hasChildren: false,
-      };
-      setTreeData([...treeData, newNode]);
-    }
-  };
+
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50 p-4 sm:p-6 lg:p-8">
       <div className="max-w-5xl mx-auto">
-       
-          
-
-         
-
         {/* Tree View */}
         <TreeView data={treeData} onChange={setTreeData} />
-
-        
-        
       </div>
     </div>
   );
