@@ -21,9 +21,7 @@ interface DragState {
   dropPosition: 'before' | 'after' | 'inside' | null;
 }
 
-// ============================================================================
-// MOCK API SERVICE - LAZY LOADING SIMULATION
-// ============================================================================
+
 
 const mockApiService = {
   fetchChildren: async (parentId: string): Promise<TreeNode[]> => {
@@ -41,9 +39,7 @@ const mockApiService = {
   }
 };
 
-// ============================================================================
-// TREE NODE COMPONENT
-// ============================================================================
+
 
 interface TreeNodeProps {
   node: TreeNode;
@@ -324,9 +320,7 @@ const TreeNodeComponent = ({
   );
 };
 
-// ============================================================================
-// TREE VIEW COMPONENT
-// ============================================================================
+
 
 interface TreeViewProps {
   data: TreeNode[];
@@ -544,49 +538,62 @@ export const TreeView = ({ data, onChange }: TreeViewProps) => {
   );
 };
 
-// ============================================================================
-// DEMO APP
-// ============================================================================
 
 export default function App() {
   const [treeData, setTreeData] = useState<TreeNode[]>([
-    {
-      id: "root-1",
-      name: "Documents",
-      hasChildren: true,
-      isExpanded: true,
-      children: [
-        {
-          id: "root-1-1",
-          name: "Work",
-          hasChildren: true,
-        },
-        {
-          id: "root-1-2",
-          name: "Personal",
-          hasChildren: false,
-        },
-      ],
-    },
-    {
-      id: "root-2",
-      name: "Projects",
-      hasChildren: true,
-      isExpanded: false,
-    },
-    {
-      id: "root-3",
-      name: "Archive",
-      hasChildren: false,
-    },
-  ]);
+  {
+    id: "A",
+    name: "Level A",
+    hasChildren: true,
+    isExpanded: true,
+    children: [
+      {
+        id: "B-1",
+        name: "Level B",
+        hasChildren: true,
+        isExpanded: true,
+        children: [
+          {
+            id: "C-1",
+            name: "Level C",
+            hasChildren: true,
+            isExpanded: true,
+            children: [
+              {
+                id: "D-1",
+                name: "Level D",
+                hasChildren: false,
+              },
+            ],
+          },
+          {
+            id: "C-2",
+            name: "Level C",
+            hasChildren: false,
+          },
+          {
+            id: "C-3",
+            name: "Level C",
+            hasChildren: false,
+          },
+        ],
+      },
+      {
+        id: "B-2",
+        name: "Level B",
+        hasChildren: false,
+      },
+    ],
+  },
+]
+);
 
 
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50 p-4 sm:p-6 lg:p-8">
       <div className="max-w-5xl mx-auto">
-        {/* Tree View */}
+        
         <TreeView data={treeData} onChange={setTreeData} />
       </div>
     </div>
