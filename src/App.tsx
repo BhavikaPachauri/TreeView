@@ -1,360 +1,321 @@
-import React, { useState, createContext, useContext, ReactNode } from 'react';
-import { ChevronRight, ChevronDown, Plus, Trash2, Edit2, Loader, Sparkles } from 'lucide-react';
-import {
-  DndContext,
-  DragEndEvent,
-  DragOverlay,
-  DragStartEvent,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  closestCenter,
-} from '@dnd-kit/core';
-import { useSortable } from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
+import React from "react";
+import { useState, useRef } from "react";
 
-// Types
+
+import { ChevronRight, ChevronDown, Plus, Trash2, Edit2, GripVertical, Loader, FolderOpen, Folder, FileText, X, Check } from "lucide-react";
+
+
+
 interface TreeNode {
   id: string;
-  label: string;
-  children?: TreeNode[];
+  name: string;
   hasChildren?: boolean;
-  isLoaded?: boolean;
-  color?: string;
-  gradient?: string;
+  isExpanded?: boolean;
+  children?: TreeNode[];
+  isLoading?: boolean;
 }
 
-interface TreeContextType {
-  treeData: TreeNode[];
-  expandedNodes: Set<string>;
-  toggleNode: (id: string) => void;
-  addNode: (parentId: string, label: string) => void;
-  deleteNode: (id: string) => void;
-  updateNode: (id: string, label: string) => void;
-  loadChildren: (parentId: string) => Promise<void>;
-  moveNode: (draggedId: string, targetId: string, position: 'before' | 'after' | 'inside') => void;
+interface DragState {
+  draggedNodeId: string | null;
+  dropTargetId: string | null;
+  dropPosition: 'before' | 'after' | 'inside' | null;
 }
 
-// Context
-const TreeContext = createContext<TreeContextType | undefined>(undefined);
+// ============================================================================
+// MOCK API SERVICE - LAZY LOADING SIMULATION
+// ============================================================================
 
-const useTree = () => {
-  const context = useContext(TreeContext);
-  if (!context) throw new Error('useTree must be used within TreeProvider');
-  return context;
+const mockApiService = {
+  fetchChildren: async (parentId: string): Promise<TreeNode[]> => {
+    return new Promise((resolve) => {
+      setTimeout(() => {
+        const childCount = Math.floor(Math.random() * 4) + 1;
+        const children: TreeNode[] = Array.from({ length: childCount }, (_, i) => ({
+          id: `${parentId}-child-${i + 1}-${Date.now()}`,
+          name: `Child ${i + 1} of ${parentId.split('-').pop()}`,
+          hasChildren: Math.random() > 0.5,
+        }));
+        resolve(children);
+      }, 800);
+    });
+  }
 };
 
-// Mock data
-const initialData: TreeNode[] = [
-  {
-    id: 'a',
-    label: 'Level A',
-    gradient: 'from-blue-500 to-blue-600',
-    hasChildren: true,
-    isLoaded: false,
-  },
-];
+// ============================================================================
+// TREE NODE COMPONENT
+// ============================================================================
 
-// Simulate API call for lazy loading
-const fetchChildren = async (parentId: string): Promise<TreeNode[]> => {
-  await new Promise(resolve => setTimeout(resolve, 1000));
-  
-  const childrenMap: Record<string, TreeNode[]> = {
-    'a': [
-      { id: 'b', label: 'Level A', gradient: 'from-emerald-400 to-emerald-500', hasChildren: true, isLoaded: false },
-      { id: 'g', label: 'Level A', gradient: 'from-green-400 to-green-500', hasChildren: false },
-    ],
-    'b': [
-      { id: 'c', label: 'Level A', gradient: 'from-teal-400 to-cyan-500', hasChildren: true, isLoaded: false },
-      { id: 'e', label: 'Level A', gradient: 'from-lime-400 to-green-500', hasChildren: false },
-      { id: 'f', label: 'Level A', gradient: 'from-emerald-500 to-teal-500', hasChildren: false },
-    ],
-    'c': [
-      { id: 'd', label: 'Level A', gradient: 'from-yellow-400 to-amber-500', hasChildren: false },
-    ],
-  };
-
-  return childrenMap[parentId] || [];
-};
-
-// Tree Node Component
-interface TreeNodeComponentProps {
+interface TreeNodeProps {
   node: TreeNode;
   level: number;
-  isLast: boolean;
-  parentIsLast?: boolean[];
+  onUpdate: (id: string, updates: Partial<TreeNode>) => void;
+  onDelete: (id: string) => void;
+  onAddChild: (parentId: string, childName: string) => void;
+  onLoadChildren: (nodeId: string) => Promise<void>;
+  onDragStart: (nodeId: string) => void;
+  onDragEnd: () => void;
+  onDragOver: (nodeId: string, position: 'before' | 'after' | 'inside') => void;
+  onDrop: (targetId: string, position: 'before' | 'after' | 'inside') => void;
+  dragState: DragState;
 }
 
-const TreeNodeComponent: React.FC<TreeNodeComponentProps> = ({ node, level, isLast, parentIsLast = [] }) => {
-  const { expandedNodes, toggleNode, addNode, deleteNode, updateNode, loadChildren } = useTree();
+const TreeNodeComponent = ({
+  node,
+  level,
+  onUpdate,
+  onDelete,
+  onAddChild,
+  onLoadChildren,
+  onDragStart,
+  onDragEnd,
+  onDragOver,
+  onDrop,
+  dragState
+}: TreeNodeProps) => {
   const [isEditing, setIsEditing] = useState(false);
-  const [editValue, setEditValue] = useState(node.label);
-  const [isLoading, setIsLoading] = useState(false);
-  const [showAddInput, setShowAddInput] = useState(false);
-  const [newNodeName, setNewNodeName] = useState('');
-  const [isHovered, setIsHovered] = useState(false);
-
-  const isExpanded = expandedNodes.has(node.id);
-  const hasChildren = node.hasChildren || (node.children && node.children.length > 0);
-
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({
-    id: node.id,
-    data: { node, level },
-  });
-
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.5 : 1,
-  };
+  const [editValue, setEditValue] = useState(node.name);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const handleToggle = async () => {
-    if (!isExpanded && hasChildren && !node.isLoaded) {
-      setIsLoading(true);
-      await loadChildren(node.id);
-      setIsLoading(false);
-    }
-    toggleNode(node.id);
-  };
-
-  const handleEdit = () => {
-    if (editValue.trim()) {
-      updateNode(node.id, editValue.trim());
+    if (!node.hasChildren) return;
+    if (!node.isExpanded && !node.children) {
+      await onLoadChildren(node.id);
     } else {
-      setEditValue(node.label);
-    }
-    setIsEditing(false);
-  };
-
-  const handleDelete = () => {
-    if (window.confirm(`Are you sure you want to delete "${node.label}" and all its children?`)) {
-      deleteNode(node.id);
+      onUpdate(node.id, { isExpanded: !node.isExpanded });
     }
   };
 
   const handleAddChild = () => {
-    if (newNodeName.trim()) {
-      addNode(node.id, newNodeName.trim());
-      setNewNodeName('');
-      setShowAddInput(false);
-      if (!isExpanded) {
-        toggleNode(node.id);
-      }
+    const childName = prompt("Enter child node name:");
+    if (childName && childName.trim()) {
+      onAddChild(node.id, childName.trim());
     }
   };
 
+  const handleDelete = () => {
+    const message = node.children?.length 
+      ? `Delete "${node.name}" and all its children?`
+      : `Delete "${node.name}"?`;
+    
+    if (confirm(message)) {
+      onDelete(node.id);
+    }
+  };
+
+  const handleDoubleClick = () => {
+    setIsEditing(true);
+    setEditValue(node.name);
+    setTimeout(() => inputRef.current?.focus(), 0);
+  };
+
+  const handleEditSave = () => {
+    if (editValue.trim()) {
+      onUpdate(node.id, { name: editValue.trim() });
+    }
+    setIsEditing(false);
+  };
+
+  const handleEditCancel = () => {
+    setEditValue(node.name);
+    setIsEditing(false);
+  };
+
+  const handleDragStart = (e: React.DragEvent) => {
+    e.stopPropagation();
+    onDragStart(node.id);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (dragState.draggedNodeId === node.id) return;
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    const height = rect.height;
+
+    let position: 'before' | 'after' | 'inside';
+    if (y < height * 0.25) {
+      position = 'before';
+    } else if (y > height * 0.75) {
+      position = 'after';
+    } else {
+      position = 'inside';
+    }
+
+    onDragOver(node.id, position);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (dragState.dropPosition) {
+      onDrop(node.id, dragState.dropPosition);
+    }
+  };
+
+  const isDragging = dragState.draggedNodeId === node.id;
+  const isDropTarget = dragState.dropTargetId === node.id;
+  const dropPosition = isDropTarget ? dragState.dropPosition : null;
+
   return (
-    <div className="relative">
-      {/* Connecting Lines */}
-      {level > 0 && (
-        <>
-          {/* Horizontal line with gradient */}
-          <div
-            className="absolute border-l-2 border-t-2 border-purple-200 rounded-tl-lg"
-            style={{
-              left: `${(level - 1) * 40 + 20}px`,
-              top: '28px',
-              width: '24px',
-              height: '1px',
-            }}
-          />
-          {/* Vertical line from parent */}
-          {!isLast && (
-            <div
-              className="absolute border-l-2 border-purple-200"
-              style={{
-                left: `${(level - 1) * 40 + 20}px`,
-                top: '28px',
-                bottom: '0',
-                width: '1px',
-              }}
-            />
-          )}
-          {/* Vertical lines for ancestors */}
-          {parentIsLast.map((isParentLast, idx) => {
-            if (!isParentLast) {
-              return (
-                <div
-                  key={idx}
-                  className="absolute border-l-2 border-purple-200"
-                  style={{
-                    left: `${idx * 40 + 20}px`,
-                    top: '0',
-                    bottom: '0',
-                    width: '1px',
-                  }}
-                />
-              );
-            }
-            return null;
-          })}
-        </>
+    <div className="relative group">
+      {/* Drop Indicators */}
+      {dropPosition === 'before' && (
+        <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-blue-500 to-purple-500 z-20 shadow-lg" />
+      )}
+      {dropPosition === 'after' && (
+        <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-blue-500 to-purple-500 z-20 shadow-lg" />
       )}
 
+      {/* Node Row */}
       <div
-        ref={setNodeRef}
-        style={{ ...style, paddingLeft: `${level * 40}px` }}
-        className="group flex items-center gap-4 py-2 relative z-10"
-        onMouseEnter={() => setIsHovered(true)}
-        onMouseLeave={() => setIsHovered(false)}
-        {...attributes}
-        {...listeners}
+        className={`
+          flex items-center gap-2 sm:gap-3 py-2 px-2 sm:px-3 rounded-xl transition-all duration-200
+          ${isDragging ? 'opacity-40 scale-95' : ''}
+          ${dropPosition === 'inside' 
+            ? 'bg-gradient-to-r from-blue-50 to-purple-50 ring-2 ring-blue-400 shadow-md scale-[1.02]' 
+            : 'hover:bg-gradient-to-r hover:from-gray-50 hover:to-slate-50'
+          }
+        `}
+        style={{ paddingLeft: `${level * 20 + 8}px` }}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
       >
-        {/* Node Avatar with gradient */}
+        {/* Drag Handle */}
         <div
-          className={`w-12 h-12 rounded-full bg-gradient-to-br ${node.gradient || 'from-gray-400 to-gray-500'} flex items-center justify-center text-white font-bold text-lg flex-shrink-0 shadow-lg hover:shadow-xl transition-all duration-300 cursor-grab active:cursor-grabbing ring-4 ring-white ${
-            isHovered ? 'scale-110' : ''
-          }`}
+          draggable
+          onDragStart={handleDragStart}
+          onDragEnd={onDragEnd}
+          className="cursor-grab active:cursor-grabbing text-gray-400 hover:text-gray-700 transition-colors opacity-0 group-hover:opacity-100"
         >
-          {node.label.match(/Level ([A-Z])/)?.[1] || node.label.charAt(0).toUpperCase()}
-        </div>
-
-        {/* Node Label Card */}
-        <div className={`flex items-center gap-3 bg-white rounded-xl px-5 py-3 shadow-md hover:shadow-xl transition-all duration-300 flex-1 max-w-md border-2 ${
-          isHovered ? 'border-purple-300 scale-[1.02]' : 'border-transparent'
-        }`}>
-          {isEditing ? (
-            <input
-              type="text"
-              value={editValue}
-              onChange={(e) => setEditValue(e.target.value)}
-              onBlur={handleEdit}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') handleEdit();
-                if (e.key === 'Escape') {
-                  setEditValue(node.label);
-                  setIsEditing(false);
-                }
-              }}
-              className="flex-1 px-3 py-2 text-sm font-semibold border-2 border-purple-400 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-300 bg-purple-50"
-              autoFocus
-              onPointerDown={(e) => e.stopPropagation()}
-              onMouseDown={(e) => e.stopPropagation()}
-            />
-          ) : (
-            <>
-              <span
-                className="flex-1 font-semibold text-gray-800 text-sm select-none"
-                onDoubleClick={() => setIsEditing(true)}
-              >
-                {node.label}
-              </span>
-
-              {/* Add Button */}
-              <button
-                onClick={() => setShowAddInput(true)}
-                className={`p-2 rounded-lg transition-all duration-300 bg-gradient-to-br from-purple-500 to-pink-500 text-white hover:from-purple-600 hover:to-pink-600 shadow-md hover:shadow-lg ${
-                  isHovered ? 'scale-110' : ''
-                }`}
-                title="Add child"
-              >
-                <Plus size={18} strokeWidth={2.5} />
-              </button>
-            </>
-          )}
-        </div>
-
-        {/* Hidden Action Buttons */}
-        <div className={`flex items-center gap-2 transition-all duration-300 ${
-          isHovered ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-4'
-        }`}>
-          {!isEditing && (
-            <>
-              <button
-                onClick={() => setIsEditing(true)}
-                className="p-2 hover:bg-blue-100 text-blue-600 rounded-lg transition-all duration-200 hover:scale-110 shadow-sm hover:shadow-md"
-                title="Edit"
-              >
-                <Edit2 size={16} />
-              </button>
-              <button
-                onClick={handleDelete}
-                className="p-2 hover:bg-red-100 text-red-600 rounded-lg transition-all duration-200 hover:scale-110 shadow-sm hover:shadow-md"
-                title="Delete"
-              >
-                <Trash2 size={16} />
-              </button>
-            </>
-          )}
+          <GripVertical size={18} className="hidden sm:block" />
+          <GripVertical size={16} className="sm:hidden" />
         </div>
 
         {/* Expand/Collapse Button */}
-        {hasChildren && (
-          <button
-            onClick={handleToggle}
-            className="absolute left-0 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-full transition-all duration-300 bg-gradient-to-br from-purple-500 to-pink-500 text-white shadow-lg hover:shadow-xl hover:scale-110 border-2 border-white"
-            style={{ left: `${level * 40 - 14}px` }}
-            disabled={isLoading}
-          >
-            {isLoading ? (
-              <Loader size={14} className="animate-spin" />
-            ) : isExpanded ? (
-              <ChevronDown size={14} strokeWidth={3} />
+        <button
+          onClick={handleToggle}
+          disabled={!node.hasChildren}
+          className={`
+            w-6 h-6 sm:w-7 sm:h-7 flex items-center justify-center rounded-lg transition-all duration-200
+            ${node.hasChildren 
+              ? 'text-gray-700 hover:bg-gradient-to-br hover:from-blue-100 hover:to-purple-100 hover:shadow-sm cursor-pointer active:scale-95' 
+              : 'text-transparent cursor-default'}
+          `}
+        >
+          {node.isLoading ? (
+            <Loader size={16} className="animate-spin text-blue-600" />
+          ) : node.hasChildren ? (
+            node.isExpanded ? (
+              <ChevronDown size={18} className="text-blue-600" />
             ) : (
-              <ChevronRight size={14} strokeWidth={3} />
-            )}
-          </button>
+              <ChevronRight size={18} className="text-gray-500" />
+            )
+          ) : null}
+        </button>
+
+        {/* Icon */}
+        <div className="flex-shrink-0">
+          {node.hasChildren ? (
+            node.isExpanded ? (
+              <FolderOpen size={20} className="text-blue-500" />
+            ) : (
+              <Folder size={20} className="text-yellow-600" />
+            )
+          ) : (
+            <FileText size={18} className="text-gray-400" />
+          )}
+        </div>
+
+        {/* Node Content */}
+        <div className="flex-1 flex items-center gap-2 min-w-0">
+          {isEditing ? (
+            <div className="flex-1 flex items-center gap-2">
+              <input
+                ref={inputRef}
+                type="text"
+                value={editValue}
+                onChange={(e) => setEditValue(e.target.value)}
+                onBlur={handleEditSave}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleEditSave();
+                  if (e.key === 'Escape') handleEditCancel();
+                }}
+                className="flex-1 px-3 py-1.5 text-sm sm:text-base border-2 border-blue-400 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white shadow-sm"
+              />
+              <button
+                onClick={handleEditSave}
+                className="p-1.5 sm:p-2 text-white bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 rounded-lg transition-all shadow-md hover:shadow-lg active:scale-95"
+              >
+                <Check size={16} />
+              </button>
+              <button
+                onClick={handleEditCancel}
+                className="p-1.5 sm:p-2 text-white bg-gradient-to-r from-red-500 to-rose-500 hover:from-red-600 hover:to-rose-600 rounded-lg transition-all shadow-md hover:shadow-lg active:scale-95"
+              >
+                <X size={16} />
+              </button>
+            </div>
+          ) : (
+            <span
+              onDoubleClick={handleDoubleClick}
+              className="flex-1 text-sm sm:text-base font-medium text-gray-800 cursor-text truncate hover:text-gray-900 transition-colors"
+              title="Double-click to edit"
+            >
+              {node.name}
+            </span>
+          )}
+        </div>
+
+        {/* Action Buttons */}
+        {!isEditing && (
+          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button
+              onClick={() => setIsEditing(true)}
+              className="p-1.5 sm:p-2 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all hover:shadow-sm active:scale-95"
+              title="Edit"
+            >
+              <Edit2 size={14} className="sm:w-4 sm:h-4" />
+            </button>
+            <button
+              onClick={handleAddChild}
+              className="p-1.5 sm:p-2 text-gray-500 hover:text-green-600 hover:bg-green-50 rounded-lg transition-all hover:shadow-sm active:scale-95"
+              title="Add child"
+            >
+              <Plus size={14} className="sm:w-4 sm:h-4" />
+            </button>
+            <button
+              onClick={handleDelete}
+              className="p-1.5 sm:p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all hover:shadow-sm active:scale-95"
+              title="Delete"
+            >
+              <Trash2 size={14} className="sm:w-4 sm:h-4" />
+            </button>
+          </div>
         )}
       </div>
 
-      {/* Add Child Input */}
-      {showAddInput && (
-        <div style={{ paddingLeft: `${(level + 1) * 40}px` }} className="flex items-center gap-4 py-2 animate-in fade-in slide-in-from-top-2 duration-300">
-          <div className="w-12 h-12 rounded-full bg-gradient-to-br from-gray-300 to-gray-400 flex items-center justify-center text-white font-bold text-lg shadow-lg ring-4 ring-white">
-            <Sparkles size={20} />
-          </div>
-          <div className="flex items-center gap-3 bg-gradient-to-br from-purple-50 to-pink-50 border-2 border-purple-400 rounded-xl px-4 py-3 shadow-lg flex-1 max-w-md">
-            <input
-              type="text"
-              value={newNodeName}
-              onChange={(e) => setNewNodeName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') handleAddChild();
-                if (e.key === 'Escape') {
-                  setNewNodeName('');
-                  setShowAddInput(false);
-                }
-              }}
-              placeholder="Enter node name..."
-              className="flex-1 px-2 text-sm font-medium focus:outline-none bg-transparent placeholder-purple-400"
-              autoFocus
-            />
-            <button
-              onClick={handleAddChild}
-              className="px-3 py-1.5 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-lg hover:from-green-600 hover:to-emerald-700 transition-all duration-200 font-semibold text-sm shadow-md hover:shadow-lg hover:scale-105"
-            >
-              Add
-            </button>
-            <button
-              onClick={() => {
-                setNewNodeName('');
-                setShowAddInput(false);
-              }}
-              className="px-3 py-1.5 bg-gradient-to-r from-gray-400 to-gray-500 text-white rounded-lg hover:from-gray-500 hover:to-gray-600 transition-all duration-200 font-semibold text-sm shadow-md hover:shadow-lg hover:scale-105"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* Children */}
-      {isExpanded && node.children && (
-        <div className="animate-in fade-in slide-in-from-top-1 duration-300">
-          {node.children.map((child, index) => (
+      {node.isExpanded && node.children && (
+        <div className="ml-2 sm:ml-4 border-l-2 border-gray-200 mt-1">
+          {node.children.map((child) => (
             <TreeNodeComponent
               key={child.id}
               node={child}
               level={level + 1}
-              isLast={index === node.children!.length - 1}
-              parentIsLast={[...parentIsLast, isLast]}
+              onUpdate={onUpdate}
+              onDelete={onDelete}
+              onAddChild={onAddChild}
+              onLoadChildren={onLoadChildren}
+              onDragStart={onDragStart}
+              onDragEnd={onDragEnd}
+              onDragOver={onDragOver}
+              onDrop={onDrop}
+              dragState={dragState}
             />
           ))}
         </div>
@@ -363,214 +324,289 @@ const TreeNodeComponent: React.FC<TreeNodeComponentProps> = ({ node, level, isLa
   );
 };
 
-// Tree Provider
-const TreeProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [treeData, setTreeData] = useState<TreeNode[]>(initialData);
-  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
+// ============================================================================
+// TREE VIEW COMPONENT
+// ============================================================================
 
-  const toggleNode = (id: string) => {
-    setExpandedNodes((prev) => {
-      const newSet = new Set(prev);
-      if (newSet.has(id)) {
-        newSet.delete(id);
-      } else {
-        newSet.add(id);
+interface TreeViewProps {
+  data: TreeNode[];
+  onChange: (data: TreeNode[]) => void;
+}
+
+export const TreeView = ({ data, onChange }: TreeViewProps) => {
+  const [dragState, setDragState] = useState<DragState>({
+    draggedNodeId: null,
+    dropTargetId: null,
+    dropPosition: null,
+  });
+
+  const findNode = (nodes: TreeNode[], id: string): TreeNode | null => {
+    for (const node of nodes) {
+      if (node.id === id) return node;
+      if (node.children) {
+        const found = findNode(node.children, id);
+        if (found) return found;
       }
-      return newSet;
+    }
+    return null;
+  };
+
+  const updateNode = (nodes: TreeNode[], id: string, updates: Partial<TreeNode>): TreeNode[] => {
+    return nodes.map(node => {
+      if (node.id === id) {
+        return { ...node, ...updates };
+      }
+      if (node.children) {
+        return { ...node, children: updateNode(node.children, id, updates) };
+      }
+      return node;
     });
   };
 
-  const addNode = (parentId: string, label: string) => {
-    const gradients = [
-      'from-rose-400 to-pink-500',
-      'from-violet-400 to-purple-500',
-      'from-cyan-400 to-blue-500',
-      'from-amber-400 to-orange-500',
-      'from-emerald-400 to-green-500',
-      'from-fuchsia-400 to-pink-500',
-    ];
-    const newNode: TreeNode = {
-      id: `node-${Date.now()}`,
-      label,
-      gradient: gradients[Math.floor(Math.random() * gradients.length)],
-      hasChildren: false,
-      isLoaded: true,
+  const removeNode = (nodes: TreeNode[], id: string): TreeNode[] => {
+    return nodes.filter(node => {
+      if (node.id === id) return false;
+      if (node.children) {
+        return { ...node, children: removeNode(node.children, id) };
+      }
+      return true;
+    }).map(node => {
+      if (node.children) {
+        return { ...node, children: removeNode(node.children, id) };
+      }
+      return node;
+    });
+  };
+
+  const extractNode = (nodes: TreeNode[], id: string): { tree: TreeNode[], node: TreeNode | null } => {
+    let extractedNode: TreeNode | null = null;
+    
+    const filterTree = (items: TreeNode[]): TreeNode[] => {
+      return items.filter(item => {
+        if (item.id === id) {
+          extractedNode = item;
+          return false;
+        }
+        if (item.children) {
+          item.children = filterTree(item.children);
+        }
+        return true;
+      });
     };
 
-    const addToTree = (nodes: TreeNode[]): TreeNode[] => {
-      return nodes.map((node) => {
-        if (node.id === parentId) {
-          return {
+    const tree = filterTree(JSON.parse(JSON.stringify(nodes)));
+    return { tree, node: extractedNode };
+  };
+
+  const insertNode = (
+    nodes: TreeNode[],
+    targetId: string,
+    nodeToInsert: TreeNode,
+    position: 'before' | 'after' | 'inside'
+  ): TreeNode[] => {
+    const result: TreeNode[] = [];
+
+    for (const node of nodes) {
+      if (node.id === targetId) {
+        if (position === 'before') {
+          result.push(nodeToInsert, node);
+        } else if (position === 'after') {
+          result.push(node, nodeToInsert);
+        } else if (position === 'inside') {
+          result.push({
             ...node,
-            children: [...(node.children || []), newNode],
+            children: [...(node.children || []), nodeToInsert],
             hasChildren: true,
-            isLoaded: true,
-          };
+            isExpanded: true,
+          });
         }
+      } else {
         if (node.children) {
-          return { ...node, children: addToTree(node.children) };
+          result.push({ ...node, children: insertNode(node.children, targetId, nodeToInsert, position) });
+        } else {
+          result.push(node);
         }
-        return node;
-      });
-    };
+      }
+    }
 
-    setTreeData(addToTree(treeData));
+    return result;
   };
 
-  const deleteNode = (id: string) => {
-    const removeFromTree = (nodes: TreeNode[]): TreeNode[] => {
-      return nodes
-        .filter((node) => node.id !== id)
-        .map((node) => ({
-          ...node,
-          children: node.children ? removeFromTree(node.children) : undefined,
-        }));
+  const handleUpdate = (id: string, updates: Partial<TreeNode>) => {
+    onChange(updateNode(data, id, updates));
+  };
+
+  const handleDelete = (id: string) => {
+    onChange(removeNode(data, id));
+  };
+
+  const handleAddChild = (parentId: string, childName: string) => {
+    const newChild: TreeNode = {
+      id: `node-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      name: childName,
+      hasChildren: false,
     };
 
-    setTreeData(removeFromTree(treeData));
-    setExpandedNodes((prev) => {
-      const newSet = new Set(prev);
-      newSet.delete(id);
-      return newSet;
+    onChange(updateNode(data, parentId, {
+      children: [...(findNode(data, parentId)?.children || []), newChild],
+      hasChildren: true,
+      isExpanded: true,
+    }));
+  };
+
+  const handleLoadChildren = async (nodeId: string) => {
+    onChange(updateNode(data, nodeId, { isLoading: true }));
+
+    try {
+      const children = await mockApiService.fetchChildren(nodeId);
+      onChange(updateNode(data, nodeId, {
+        children,
+        isExpanded: true,
+        isLoading: false,
+      }));
+    } catch (error) {
+      console.error('Failed to load children:', error);
+      onChange(updateNode(data, nodeId, { isLoading: false }));
+    }
+  };
+
+  const handleDragStart = (nodeId: string) => {
+    setDragState({
+      draggedNodeId: nodeId,
+      dropTargetId: null,
+      dropPosition: null,
     });
   };
 
-  const updateNode = (id: string, label: string) => {
-    const updateInTree = (nodes: TreeNode[]): TreeNode[] => {
-      return nodes.map((node) => {
-        if (node.id === id) {
-          return { ...node, label };
-        }
-        if (node.children) {
-          return { ...node, children: updateInTree(node.children) };
-        }
-        return node;
-      });
-    };
-
-    setTreeData(updateInTree(treeData));
+  const handleDragEnd = () => {
+    setDragState({
+      draggedNodeId: null,
+      dropTargetId: null,
+      dropPosition: null,
+    });
   };
 
-  const loadChildren = async (parentId: string) => {
-    const children = await fetchChildren(parentId);
-
-    const addChildrenToTree = (nodes: TreeNode[]): TreeNode[] => {
-      return nodes.map((node) => {
-        if (node.id === parentId) {
-          return {
-            ...node,
-            children: children,
-            isLoaded: true,
-          };
-        }
-        if (node.children) {
-          return { ...node, children: addChildrenToTree(node.children) };
-        }
-        return node;
-      });
-    };
-
-    setTreeData(addChildrenToTree(treeData));
+  const handleDragOver = (nodeId: string, position: 'before' | 'after' | 'inside') => {
+    setDragState(prev => ({
+      ...prev,
+      dropTargetId: nodeId,
+      dropPosition: position,
+    }));
   };
 
-  const moveNode = (draggedId: string, targetId: string, position: 'before' | 'after' | 'inside') => {
-    console.log('Move', draggedId, 'to', targetId, position);
-  };
+  const handleDrop = (targetId: string, position: 'before' | 'after' | 'inside') => {
+    if (!dragState.draggedNodeId || dragState.draggedNodeId === targetId) {
+      setDragState({ draggedNodeId: null, dropTargetId: null, dropPosition: null });
+      return;
+    }
 
-  const value: TreeContextType = {
-    treeData,
-    expandedNodes,
-    toggleNode,
-    addNode,
-    deleteNode,
-    updateNode,
-    loadChildren,
-    moveNode,
-  };
+    const { tree: treeWithoutDragged, node: draggedNode } = extractNode(data, dragState.draggedNodeId);
+    
+    if (!draggedNode) {
+      setDragState({ draggedNodeId: null, dropTargetId: null, dropPosition: null });
+      return;
+    }
 
-  return <TreeContext.Provider value={value}>{children}</TreeContext.Provider>;
-};
+    const newTree = insertNode(treeWithoutDragged, targetId, draggedNode, position);
+    onChange(newTree);
 
-// Main TreeView Component
-const TreeView: React.FC = () => {
-  const { treeData } = useTree();
-  const [activeNode, setActiveNode] = useState<TreeNode | null>(null);
-
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: {
-        distance: 8,
-      },
-    })
-  );
-
-  const handleDragStart = (event: DragStartEvent) => {
-    const { active } = event;
-    setActiveNode(active.data.current?.node || null);
-  };
-
-  const handleDragEnd = (event: DragEndEvent) => {
-    setActiveNode(null);
+    setDragState({ draggedNodeId: null, dropTargetId: null, dropPosition: null });
   };
 
   return (
-    <DndContext
-      sensors={sensors}
-      collisionDetection={closestCenter}
-      onDragStart={handleDragStart}
-      onDragEnd={handleDragEnd}
-    >
-      <div className="min-h-screen bg-gradient-to-br from-purple-50 via-pink-50 to-blue-50 p-4 md:p-8">
-        <div className="max-w-5xl mx-auto">
-          {/* Header */}
-          <div className="text-center mb-8">
-            <h1 className="text-4xl md:text-5xl font-bold bg-gradient-to-r from-purple-600 via-pink-600 to-blue-600 bg-clip-text text-transparent mb-3">
-              Tree View Component
-            </h1>
-          
-          </div>
-
-          {/* Tree Container */}
-          <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-2xl p-6 md:p-10 border border-white/50">
-            <div>
-              {treeData.map((node, index) => (
-                <TreeNodeComponent
-                  key={node.id}
-                  node={node}
-                  level={0}
-                  isLast={index === treeData.length - 1}
-                />
-              ))}
-            </div>
-          </div>
-
-          {/* Instructions */}
-          
-          
+    <div className="bg-white rounded-2xl border border-gray-200 shadow-xl overflow-hidden">
+      {data.length === 0 ? (
+        <div className="p-12 sm:p-16 text-center">
+          <Folder size={64} className="mx-auto mb-4 text-gray-300" />
+          <p className="text-gray-500 text-lg">No nodes yet. Add a root node to get started.</p>
         </div>
-      </div>
-
-      <DragOverlay>
-        {activeNode && (
-          <div className="flex items-center gap-4 bg-white p-4 rounded-xl shadow-2xl border-2 border-purple-400 animate-pulse">
-            <div className={`w-12 h-12 rounded-full bg-gradient-to-br ${activeNode.gradient} flex items-center justify-center text-white font-bold text-lg shadow-lg ring-4 ring-white`}>
-              {activeNode.label.match(/Level ([A-Z])/)?.[1] || activeNode.label.charAt(0).toUpperCase()}
-            </div>
-            <span className="font-semibold text-gray-800">{activeNode.label}</span>
-          </div>
-        )}
-      </DragOverlay>
-    </DndContext>
+      ) : (
+        <div className="p-3 sm:p-6">
+          {data.map((node) => (
+            <TreeNodeComponent
+              key={node.id}
+              node={node}
+              level={0}
+              onUpdate={handleUpdate}
+              onDelete={handleDelete}
+              onAddChild={handleAddChild}
+              onLoadChildren={handleLoadChildren}
+              onDragStart={handleDragStart}
+              onDragEnd={handleDragEnd}
+              onDragOver={handleDragOver}
+              onDrop={handleDrop}
+              dragState={dragState}
+            />
+          ))}
+        </div>
+      )}
+    </div>
   );
 };
 
-// App Component
-const App: React.FC = () => {
+// ============================================================================
+// DEMO APP
+// ============================================================================
+
+export default function App() {
+  const [treeData, setTreeData] = useState<TreeNode[]>([
+    {
+      id: "root-1",
+      name: "Documents",
+      hasChildren: true,
+      isExpanded: true,
+      children: [
+        {
+          id: "root-1-1",
+          name: "Work",
+          hasChildren: true,
+        },
+        {
+          id: "root-1-2",
+          name: "Personal",
+          hasChildren: false,
+        },
+      ],
+    },
+    {
+      id: "root-2",
+      name: "Projects",
+      hasChildren: true,
+      isExpanded: false,
+    },
+    {
+      id: "root-3",
+      name: "Archive",
+      hasChildren: false,
+    },
+  ]);
+
+  const handleAddRoot = () => {
+    const name = prompt("Enter root node name:");
+    if (name && name.trim()) {
+      const newNode: TreeNode = {
+        id: `root-${Date.now()}`,
+        name: name.trim(),
+        hasChildren: false,
+      };
+      setTreeData([...treeData, newNode]);
+    }
+  };
+
   return (
-    <TreeProvider>
-      <TreeView />
-    </TreeProvider>
-  );
-};
+    <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50 p-4 sm:p-6 lg:p-8">
+      <div className="max-w-5xl mx-auto">
+       
+          
 
-export default App;
+         
+
+        {/* Tree View */}
+        <TreeView data={treeData} onChange={setTreeData} />
+
+        
+        
+      </div>
+    </div>
+  );
+}
